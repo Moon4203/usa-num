@@ -17,15 +17,45 @@ export default async function handler(req, res) {
         "Referer": "https://apinums.com/",
         "Origin": "https://apinums.com",
       },
-      timeout: 10000, // 10 second timeout
+      timeout: 10000,
     });
 
-    // Jo bhi content aaye (JSON ya text), waisa hi bhej dein
-    res.status(response.status).send(response.data);
+    const raw = response.data;
+    const rawStr = typeof raw === 'string' ? raw : JSON.stringify(raw);
+
+    // === CODE EXTRACT KARNE KI KOSHISH ===
+    let code = null;
+
+    // 1. Try parsing as pure JSON
+    try {
+      const parsed = typeof raw === 'object' ? raw : JSON.parse(raw);
+      if (parsed && parsed.code !== undefined) {
+        code = parsed.code;
+      }
+    } catch (e) {
+      // Ignore and try regex
+    }
+
+    // 2. Regex se "code" extract karo (mixed text + JSON ke liye)
+    if (code === null) {
+      const match = rawStr.match(/"code"\s*:\s*"([^"]+)"/);
+      if (match) code = match[1];
+    }
+
+    // === CLEAN RESPONSE BHEJO ===
+    if (code !== null) {
+      return res.status(200).json({
+        site: "Moon US Nums",
+        code: code,
+      });
+    }
+
+    // Fallback: agar code nahi mila to original bhej do
+    res.status(200).send(raw);
+
   } catch (error) {
-    // Asli error message bhejein taake pata chale problem kya hai
     const errorMsg = error.response
-      ? `Upstream Error: ${error.response.status} - ${JSON.stringify(error.response.data)}`
+      ? `Upstream Error: ${error.response.status}`
       : `Fetch Error: ${error.message}`;
     res.status(500).send(errorMsg);
   }
