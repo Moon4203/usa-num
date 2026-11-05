@@ -1,84 +1,71 @@
 const axios = require('axios');
 
 export default async function handler(req, res) {
-  // ⬇️ Cache rokne ke liye headers (ye zaroori hain)
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.setHeader('Surrogate-Control', 'no-store');
 
   const { token } = req.query;
-
-  if (!token) {
-    return res.status(400).send("Missing token parameter");
-  }
+  if (!token) return res.status(400).send("Missing token parameter");
 
   const target = `https://apinums.com/apinumsofficial/smsapi/getsms.php?token=${token}`;
 
   try {
     const response = await axios.get(target, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
         "Referer": "https://apinums.com/",
         "Origin": "https://apinums.com",
       },
       timeout: 10000,
-      // ⬇️ Axios ko transform mat karne dein - raw text hi chahiye
       transformResponse: [(data) => data],
+      maxRedirects: 5,
+      validateStatus: () => true,
     });
 
     let rawStr = response.data;
+    if (typeof rawStr !== 'string') rawStr = JSON.stringify(rawStr);
 
-    // Agar object aa gaya to string bana dein
-    if (typeof rawStr !== 'string') {
-      rawStr = JSON.stringify(rawStr);
-    }
-
-    // === CODE EXTRACT KARO ===
+    // === CODE EXTRACT KARNE KI KOSHISH (MULTIPLE PATTERNS) ===
     let code = null;
-
-    // Method 1: JSON parse try karo
-    try {
-      const parsed = JSON.parse(rawStr);
-      if (parsed && parsed.code !== undefined) {
-        code = parsed.code;
+    const patterns = [
+      /"code"\s*:\s*"([^"]+)"/,
+      /'code'\s*:\s*'([^']+)'/,
+      /data-code="([^"]+)"/,
+      /<span[^>]*class="[^"]*code[^"]*"[^>]*>([^<]+)<\/span>/i,
+      /id="code"[^>]*>([^<]+)</i,
+    ];
+    for (const pat of patterns) {
+      const match = rawStr.match(pat);
+      if (match && match[1] !== 'waiting') {
+        code = match[1];
+        break;
       }
-    } catch (e) {
-      // Ignore
     }
 
-    // Method 2: Regex se dhoondo
-    if (code === null) {
-      const match = rawStr.match(/"code"\s*:\s*"([^"]+)"/);
-      if (match) code = match[1];
+    if (code) {
+      return res.status(200).json({ site: "Moon US Nums", code: code, v: "3.0" });
     }
 
-    // === CLEAN RESPONSE ===
-    if (code !== null) {
-      return res.status(200).json({
-        site: "Moon US Nums",
-        code: code,
-        v: "2.0"   // ⬅️ Version marker (check karne ke liye)
-      });
-    }
-
-    // Fallback: agar code nahi mila to debug info bhejo
+    // === FALLBACK: Pura HTML bhejo taake pata chale kya hai ===
     return res.status(200).json({
       site: "Moon US Nums",
-      error: "No code found in upstream response",
-      raw_preview: rawStr.substring(0, 200),
-      v: "2.0"
+      status: "waiting",
+      debug: "HTML page received. Code is loaded via JavaScript AJAX.",
+      html_length: rawStr.length,
+      v: "3.0"
     });
 
   } catch (error) {
-    const errorMsg = error.response
-      ? `Upstream Error: ${error.response.status}`
-      : `Fetch Error: ${error.message}`;
-    return res.status(500).json({
-      site: "Moon US Nums",
-      error: errorMsg,
-      v: "2.0"
-    });
+    return res.status(500).json({ site: "Moon US Nums", error: error.message, v: "3.0" });
   }
 }
