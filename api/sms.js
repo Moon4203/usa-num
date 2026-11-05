@@ -1,71 +1,91 @@
 const axios = require('axios');
 
 export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  // Cache disable
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Access-Control-Allow-Origin', '*');
 
   const { token } = req.query;
-  if (!token) return res.status(400).send("Missing token parameter");
+  if (!token) {
+    return res.status(400).json({ site: "Moon US Nums", error: "Missing token" });
+  }
 
-  const target = `https://apinums.com/apinumsofficial/smsapi/getsms.php?token=${token}`;
+  // Timestamp (cache-buster) - PHP site isko zaroori samajhti hai
+  const timestamp = Date.now();
+  const target = `https://apinums.com/apinumsofficial/smsapi/poll.php?token=${token}&_=${timestamp}`;
 
   try {
     const response = await axios.get(target, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36",
+        "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-        "Referer": "https://apinums.com/",
-        "Origin": "https://apinums.com",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": `https://apinums.com/apinumsofficial/smsapi/getsms.php?token=${token}`,
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "X-Requested-With": "XMLHttpRequest",
       },
-      timeout: 10000,
+      timeout: 15000,
+      // Raw text hi rakho, axios transform na kare
       transformResponse: [(data) => data],
-      maxRedirects: 5,
       validateStatus: () => true,
     });
 
-    let rawStr = response.data;
-    if (typeof rawStr !== 'string') rawStr = JSON.stringify(rawStr);
+    let raw = response.data;
+    if (typeof raw !== 'string') raw = JSON.stringify(raw);
 
-    // === CODE EXTRACT KARNE KI KOSHISH (MULTIPLE PATTERNS) ===
-    let code = null;
-    const patterns = [
-      /"code"\s*:\s*"([^"]+)"/,
-      /'code'\s*:\s*'([^']+)'/,
-      /data-code="([^"]+)"/,
-      /<span[^>]*class="[^"]*code[^"]*"[^>]*>([^<]+)<\/span>/i,
-      /id="code"[^>]*>([^<]+)</i,
-    ];
-    for (const pat of patterns) {
-      const match = rawStr.match(pat);
-      if (match && match[1] !== 'waiting') {
-        code = match[1];
-        break;
+    // JSON parse karo
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      // Kuch sites wrapper ke andar JSON bhejti hain
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try { data = JSON.parse(jsonMatch[0]); } catch (e2) {}
       }
     }
 
-    if (code) {
-      return res.status(200).json({ site: "Moon US Nums", code: code, v: "3.0" });
+    if (!data) {
+      return res.status(200).json({
+        site: "Moon US Nums",
+        status: "waiting",
+        debug: "Invalid upstream JSON",
+        raw_preview: raw.substring(0, 200),
+      });
     }
 
-    // === FALLBACK: Pura HTML bhejo taake pata chale kya hai ===
+    // === CODE EXTRACT KARO (multiple fields check) ===
+    let code = data.code || data.otp_code || (data.codes && data.codes[0]);
+
+    // === CLEAN RESPONSE ===
+    // Agar code "waiting" ya khali hai, to sirf status bhejo
+    if (!code || code === "waiting" || code === "") {
+      return res.status(200).json({
+        site: "Moon US Nums",
+        status: "waiting",
+        message: "⏳ Waiting for OTP...",
+        active: data.active === true,
+      });
+    }
+
+    // Agar code aa gaya, to sirf code bhejo (competitor ka naam hide)
     return res.status(200).json({
       site: "Moon US Nums",
-      status: "waiting",
-      debug: "HTML page received. Code is loaded via JavaScript AJAX.",
-      html_length: rawStr.length,
-      v: "3.0"
+      status: "success",
+      code: code,
     });
 
   } catch (error) {
-    return res.status(500).json({ site: "Moon US Nums", error: error.message, v: "3.0" });
+    const errorMsg = error.response
+      ? `Upstream Error: ${error.response.status}`
+      : `Fetch Error: ${error.message}`;
+    return res.status(500).json({
+      site: "Moon US Nums",
+      error: errorMsg,
+    });
   }
 }
